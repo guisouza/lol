@@ -1,14 +1,16 @@
-9.463861465454102
+// 9.463861465454102
 
 import React, { Component } from 'react';
 
 
 export default class VirtualComponent{
-    constructor(tree){
+    constructor(tree,componentSet){
+        this.componentSet = componentSet;
         this.tree = tree;
         this.rootElement = document.createElement('div');
         this.createElement = this.createElement.bind(this);
         this.appendElement = this.appendElement.bind(this);
+        this.parseMaskedGroup = this.parseMaskedGroup.bind(this);
         this.appendChildren = this.appendChildren.bind(this);
         this.parse();
         document.body.style.backgroundColor = '#ccc'
@@ -19,9 +21,20 @@ export default class VirtualComponent{
         this.rootElement.appendChild(e);
     }
 
+    findClipPath(id){
+        return this.componentSet.clipPaths[id];
+    }
+
+    findGradient(id){
+        return this.componentSet.gradients[id];
+    }
+
     createElement(d){
         let style = [];
         const el = document.createElement('div') ;
+
+        d.group && d.group.children.map(e=>el.appendChild(e));
+        el.setAttribute('data-layer-title',d.name);
 
         if (d.type === 'shape'){
 
@@ -29,13 +42,13 @@ export default class VirtualComponent{
         }
 
         if (d.type === 'text'){
-
-            // style = this.parseStyle(d.style).concat(this.parseShape(d));
-            // console.log('teste');
-            // console.log(d);
             el.innerHTML = d.text.rawText;
-            console.log(d);
-            style = style.concat(this.parseTextStyle(d.style));
+            style = style.concat(this.parseTextStyle(d));
+        }
+
+        if (d.type === 'group' && d.style && d.style.clipPath){
+            
+            style = style.concat(this.parseMaskedGroup(d,el));
         }
 
         el.setAttribute('style',style.join(';'))
@@ -43,11 +56,14 @@ export default class VirtualComponent{
         return el;
     }
 
-    parseTextStyle(style){
-        // console.log('style',style);
-        // style+=;
-        return [`color:rgb(${style.fill.color.value.r},${style.fill.color.value.g},${style.fill.color.value.b});`]
-        // console.log('style',style);
+    parseTextStyle(shape){
+        let styles = [];
+        styles.push(`color:rgb(${shape.style.fill.color.value.r},${shape.style.fill.color.value.g},${shape.style.fill.color.value.b});`);
+        styles.push(`position:absolute;`);
+        styles.push(`font-size:${shape.style.font.size}px;`);
+        styles.push(`left:${shape.transform.tx}px`);
+        styles.push(`top:${shape.transform.ty}px`);
+        return styles
     }
 
     parseShape(shape){
@@ -63,16 +79,68 @@ export default class VirtualComponent{
         if (shape.shape.type === 'rect'){
             styles.push(`width:${shape.shape.width}px;`);
             styles.push(`height:${shape.shape.height}px;`);
-            styles.push(`border-radius:${shape.shape.r[0] || 0}px ${shape.shape.r[1] || 0}px ${shape.shape.r[2] || 0}px ${shape.shape.r[3] || 0}px;`);
+            if (shape.shape.r)
+                styles.push(`border-radius:${shape.shape.r[0] || 0}px ${shape.shape.r[1] || 0}px ${shape.shape.r[2] || 0}px ${shape.shape.r[3] || 0}px;`);
+        }
+
+        if (shape.shape.type === 'path'){
+            // console.log(shape,shape.name);
+            const coords = shape.shape.path.split(' ');
+            styles.push(`width:${coords[7]}px;`);
+            styles.push(`height:${coords[8]}px;`);
+            // styles.push(`border-radius:${shape.shape.r[0] || 0}px ${shape.shape.r[1] || 0}px ${shape.shape.r[2] || 0}px ${shape.shape.r[3] || 0}px;`);
         }
 
         styles.push(`position:absolute;`);
         styles.push(`left:${shape.transform.tx}px`);
         styles.push(`top:${shape.transform.ty}px`);
 
-        console.log(shape.shape.type);
         return styles
 
+    }
+
+    parseColor(color){
+        let parsedColor = '';
+        switch (color.mode){
+            case 'RGB':
+                parsedColor = `rgb(${color.value.r},${color.value.g},${color.value.b})`
+                break
+        }
+
+        return parsedColor;
+    }
+
+    parseFIll(style){
+        let styleString = '';
+        switch(style.type){
+            case 'none': 
+                styleString = `background-color:transparent`;
+            break;
+
+            case 'pattern': 
+                const ext = style.pattern.href.match(/\.[0-9a-z]+$/i)[0];
+
+                styleString = `background-image:url(/card/resources/${style.pattern.meta.ux.uid}${ext});background-size: cover;`;
+            break;
+
+            case 'gradient': 
+
+                const gradient = this.findGradient(style.gradient.ref);
+                // console.log(gradient);
+                // console.log(style);
+                const angle = Math.atan2((style.gradient.x1 - style.gradient.x2),(style.gradient.y1 - style.gradient.y2)) * 180 / Math.PI
+                // console.log(angle);
+                styleString = `background-image:linear-gradient(${angle}deg, ${gradient.stops.map((colorStop)=>{
+                    return `${this.parseColor(colorStop.color)} ${colorStop.offset*100}%`
+                })})`;
+                // styleString = `background-color:red`;
+            break;
+
+            default:
+                styleString = `background-color:rgb(${style.color.value.r},${style.color.value.g},${style.color.value.b})`;
+        }
+    
+        return styleString;
     }
 
     parseStyle(styleSet){
@@ -82,21 +150,14 @@ export default class VirtualComponent{
             let styleString = '';
             switch(s){
                 case 'fill':
-
-                if (style.type === 'none'){
-                    styleString = `background-color:transparent`;
-                }else{
-                    styleString = `background-color:rgb(${style.color.value.r},${style.color.value.g},${style.color.value.b})`;
-                }
-                    
-
-                    break
+                    styleString = this.parseFIll(style)
+                break
 
                 case 'filters':
 
                     styleString = `filter:${style.map((z)=>{
 
-                        if (z.type = 'dropShadow'){
+                        if (z.type = 'dropShadow' && z.params.dropShadows){
                             return `drop-shadow(${z.params.dropShadows[0].dx}px ${z.params.dropShadows[0].dy}px ${z.params.dropShadows[0].r}px rgba(${z.params.dropShadows[0].color.value.r},${z.params.dropShadows[0].color.value.g},${z.params.dropShadows[0].color.value.b},${z.params.dropShadows[0].color.alpha}) )`
                         }
                         return 
@@ -115,10 +176,27 @@ export default class VirtualComponent{
 
     }
 
+    parseMaskedGroup(el,DOMel){
+        const clipPath = this.findClipPath(el.style.clipPath.ref).children[0];
+        let styles = [];
+        styles = styles.concat(this.parseShape(clipPath))
+        styles.push(`left:${clipPath.transform.tx+el.transform.tx}px`);
+        styles.push(`overflow:hidden`);
+        styles.push(`top:${clipPath.transform.ty+el.transform.ty}px`);
+    
+        el.group.children
+        .map(this.createElement)
+        .map(el => DOMel.appendChild(el))
+
+        return styles;
+    }
+
+
     appendChildren(el){
-        // console.log(el);
         if (el.group){
-            console.log(el.group.children)
+            el.group.children = el.group.children
+            .map(this.appendChildren)
+            .map(this.createElement)
         }
         return el
 
